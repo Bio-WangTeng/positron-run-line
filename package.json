@@ -1,0 +1,100 @@
+{
+  "name": "positron-run-line",
+  "displayName": "Run Current Line / Selection",
+  "description": "在编辑器工具栏添加一个「运行当前行/选中代码」按钮，类似 RStudio 的 Run 按钮。适用于 Positron 和 VS Code。",
+  "version": "1.0.0",
+  "publisher": "local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/positron-run-line"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "positron",
+    "r",
+    "python",
+    "run",
+    "execute",
+    "rstudio"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "positron-run-line.run",
+        "title": "运行当前行或选中代码 (Run Current Line/Selection)",
+        "icon": "$(run)"
+      },
+      {
+        "command": "positron-run-line.runAbove",
+        "title": "运行光标以上的所有代码 (Run All Above)",
+        "icon": "$(debug-step-back)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "positron-run-line.run",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "positron-run-line.runAbove",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "positron-run-line.run",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "9_execute@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "positron-run-line.runAbove",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus && !editorReadonly"
+      }
+    ],
+    "configuration": {
+      "title": "Run Current Line",
+      "properties": {
+        "positronRunLine.moveCursorAfterRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "运行当前行后是否自动将光标移到下一行（类似 RStudio 行为）"
+        },
+        "positronRunLine.focusConsoleAfterRun": {
+          "type": "boolean",
+          "default": false,
+          "description": "运行代码后是否将焦点移到控制台"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "install-local": "code --install-extension positron-run-line-1.0.0.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.3.0"
+  }
+}
