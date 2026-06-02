@@ -5,14 +5,11 @@ import * as vscode from 'vscode';
  *
  * 在编辑器工具栏添加「运行当前行/选中代码」按钮，类似 RStudio 的 Run 按钮。
  * - 有选中文本时：运行选中的代码
- * - 无选中文本时：运行鼠标所在行的代码
+ * - 无选中文本时：运行鼠标所在行的代码，运行后光标移到下一行末尾
  * - 额外提供「运行光标以上所有代码」功能
  *
  * 在 Positron 中，直接调用内置的 positronConsole.executeCode 命令。
  * 在普通 VS Code 中，使用 workbench.action.terminal.runSelectedText 作为降级方案。
- *
- * 注意：Positron 的 executeCode 命令自身会在运行后自动将光标移到下一行，
- * 所以扩展不需要额外移动光标，否则会跳过一行。
  */
 
 const POSITRON_COMMAND = 'workbench.action.positronConsole.executeCode';
@@ -20,41 +17,31 @@ const VSCODE_RUN_SELECTED = 'workbench.action.terminal.runSelectedText';
 
 /**
  * 缓存 Positron 命令可用性检查结果
- * 避免每次执行都调用 getCommands（有一定开销）
  */
 let _positronCommandAvailable: boolean | null = null;
 
-/**
- * 检查 Positron 命令是否可用（带缓存）
- */
 async function positronCommandAvailable(): Promise<boolean> {
 	if (_positronCommandAvailable !== null) {
 		return _positronCommandAvailable;
 	}
-
 	try {
 		const commands = await vscode.commands.getCommands(true);
 		_positronCommandAvailable = commands.includes(POSITRON_COMMAND);
 	} catch {
 		_positronCommandAvailable = false;
 	}
-
 	return _positronCommandAvailable;
 }
 
 /**
  * 获取要运行的代码文本
- * 优先返回选中的文本，如果没有选中则返回当前行
  */
 function getCodeToRun(editor: vscode.TextEditor): { code: string; line: number; isSelection: boolean } {
 	const selection = editor.selection;
-
 	if (!selection.isEmpty) {
-		// 有选中文本
 		const code = editor.document.getText(selection);
 		return { code, line: selection.start.line, isSelection: true };
 	} else {
-		// 没有选中，取当前行
 		const line = selection.active.line;
 		const code = editor.document.lineAt(line).text;
 		return { code, line, isSelection: false };
@@ -74,67 +61,53 @@ function getCodeAbove(editor: vscode.TextEditor): string {
 }
 
 /**
- * 将光标移到下一行（仅用于 VS Code 降级模式）
- * Positron 中不需要此函数，因为 executeCode 自己会移动光标
+ * 将光标强制移到目标行的末尾
+ * @param editor  当前编辑器
+ * @param line    目标行号（0-based）
  */
-function moveCursorToNextLine(editor: vscode.TextEditor): void {
-	const currentLine = editor.selection.active.line;
-	const lastLine = editor.document.lineCount - 1;
-
-	if (currentLine < lastLine) {
-		const nextLine = currentLine + 1;
-		const nextLineText = editor.document.lineAt(nextLine).text;
-		const firstNonEmpty = nextLineText.length - nextLineText.trimStart().length;
-		const newPosition = new vscode.Position(nextLine, firstNonEmpty);
-		editor.selection = new vscode.Selection(newPosition, newPosition);
-		editor.revealRange(
-			new vscode.Range(newPosition, newPosition),
-			vscode.TextEditorRevealType.Default
-		);
+function moveCursorToLineEnd(editor: vscode.TextEditor, line: number): void {
+	if (line >= editor.document.lineCount) {
+		return;
 	}
+	const lineLength = editor.document.lineAt(line).text.length;
+	const pos = new vscode.Position(line, lineLength);
+	editor.selection = new vscode.Selection(pos, pos);
+	editor.revealRange(
+		new vscode.Range(pos, pos),
+		vscode.TextEditorRevealType.Default
+	);
 }
 
 /**
- * 在 Positron 中运行代码
- * 直接委托给内置命令，它自动处理选中/当前行/语句判断和光标移动
- */
-async function runInPositron(): Promise<void> {
-	await vscode.commands.executeCommand(POSITRON_COMMAND);
-}
-
-/**
- * 在普通 VS Code 中运行代码
- * 手动处理选择/当前行逻辑，然后发送到终端
+ * 在普通 VS Code 中运行代码（降级模式）
  */
 async function runInVSCode(editor: vscode.TextEditor): Promise<void> {
 	const { code, isSelection } = getCodeToRun(editor);
-
-	const trimmed = code.trim();
-	if (!trimmed) {
+	if (!code.trim()) {
 		return;
 	}
 
-	if (isSelection) {
-		await vscode.commands.executeCommand(VSCODE_RUN_SELECTED);
-	} else {
+	if (!isSelection) {
+		// 选中整行再发送
 		const line = editor.selection.active.line;
 		const lineRange = new vscode.Range(
 			new vscode.Position(line, 0),
 			new vscode.Position(line, code.length)
 		);
 		editor.selection = new vscode.Selection(lineRange.start, lineRange.end);
-		await vscode.commands.executeCommand(VSCODE_RUN_SELECTED);
-
-		const endPos = new vscode.Position(line, code.length);
-		editor.selection = new vscode.Selection(endPos, endPos);
 	}
+
+	await vscode.commands.executeCommand(VSCODE_RUN_SELECTED);
 }
 
 /**
  * 主运行命令：运行当前行或选中代码
  *
- * Positron 路径：直接调用 executeCode，它自己处理光标移动
- * VS Code 路径：手动选行 → 终端执行 → 手动移光标
+ * 核心逻辑：
+ * 1. 记录运行前的光标行号
+ * 2. 执行代码（委托给 Positron 或 VS Code）
+ * 3. 执行后强制将光标设为「原始行号 + 1」的末尾
+ *    不依赖任何外部命令的光标行为，避免跳行 bug
  */
 async function runCurrentLineOrSelection(): Promise<void> {
 	const editor = vscode.window.activeTextEditor;
@@ -146,26 +119,31 @@ async function runCurrentLineOrSelection(): Promise<void> {
 	const config = vscode.workspace.getConfiguration('positronRunLine');
 	const moveCursor = config.get<boolean>('moveCursorAfterRun', true);
 
-	if (await positronCommandAvailable()) {
-		// === Positron 模式 ===
-		// executeCode 自己会：判断选中/当前行/语句、执行、移光标
-		// 我们不再额外移动光标，否则会跳过一行
-		const { code } = getCodeToRun(editor);
-		if (!code.trim()) {
-			return;
-		}
-		await runInPositron();
-	} else {
-		// === VS Code 降级模式 ===
-		// runSelectedText 不会自动移动光标，需要手动处理
-		await runInVSCode(editor);
+	const { code, line: originalLine, isSelection } = getCodeToRun(editor);
+	if (!code.trim()) {
+		return;
+	}
 
-		if (moveCursor) {
-			const { isSelection } = getCodeToRun(editor);
-			if (!isSelection) {
-				setTimeout(() => moveCursorToNextLine(editor), 50);
+	// 执行代码
+	if (await positronCommandAvailable()) {
+		await vscode.commands.executeCommand(POSITRON_COMMAND);
+	} else {
+		await runInVSCode(editor);
+	}
+
+	// 运行后光标处理：始终强制移到下一行末尾
+	// 无论 Positron/VS Code 对光标做了什么，我们都用绝对位置覆盖
+	if (moveCursor && !isSelection) {
+		setTimeout(() => {
+			const activeEditor = vscode.window.activeTextEditor;
+			if (!activeEditor || activeEditor.document !== editor.document) {
+				return;
 			}
-		}
+			const targetLine = originalLine + 1;
+			if (targetLine < activeEditor.document.lineCount) {
+				moveCursorToLineEnd(activeEditor, targetLine);
+			}
+		}, 80);
 	}
 }
 
@@ -184,31 +162,24 @@ async function runAllAbove(): Promise<void> {
 		return;
 	}
 
+	const cursorLine = editor.selection.active.line;
+	const lastChar = editor.document.lineAt(cursorLine).text.length;
+	const range = new vscode.Range(
+		new vscode.Position(0, 0),
+		new vscode.Position(cursorLine, lastChar)
+	);
+
 	if (await positronCommandAvailable()) {
-		const cursorLine = editor.selection.active.line;
-		const lastChar = editor.document.lineAt(cursorLine).text.length;
-		const range = new vscode.Range(
-			new vscode.Position(0, 0),
-			new vscode.Position(cursorLine, lastChar)
-		);
 		editor.selection = new vscode.Selection(range.start, range.end);
 		await vscode.commands.executeCommand(POSITRON_COMMAND);
-
-		const endPos = new vscode.Position(cursorLine, lastChar);
-		editor.selection = new vscode.Selection(endPos, endPos);
 	} else {
-		const cursorLine = editor.selection.active.line;
-		const lastChar = editor.document.lineAt(cursorLine).text.length;
-		const range = new vscode.Range(
-			new vscode.Position(0, 0),
-			new vscode.Position(cursorLine, lastChar)
-		);
 		editor.selection = new vscode.Selection(range.start, range.end);
 		await vscode.commands.executeCommand(VSCODE_RUN_SELECTED);
-
-		const endPos = new vscode.Position(cursorLine, lastChar);
-		editor.selection = new vscode.Selection(endPos, endPos);
 	}
+
+	// 取消选择，光标回到原位末尾
+	const endPos = new vscode.Position(cursorLine, lastChar);
+	editor.selection = new vscode.Selection(endPos, endPos);
 }
 
 /**
