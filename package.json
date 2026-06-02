@@ -2,7 +2,7 @@
   "name": "positron-run-line",
   "displayName": "Run Current Line / Selection",
   "description": "在编辑器工具栏添加一个「运行当前行/选中代码」按钮，类似 RStudio 的 Run 按钮。适用于 Positron 和 VS Code。",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
